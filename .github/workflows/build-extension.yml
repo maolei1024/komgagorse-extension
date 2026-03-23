@@ -1,0 +1,218 @@
+name: Build Komga-Gorse Extension APK
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'res/**'
+      - 'build.gradle'
+      - '.github/workflows/build-extension.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout extension repo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Clone extensions-source
+        run: |
+          git clone --depth 1 https://github.com/keiyoushi/extensions-source.git /tmp/extensions-source
+
+      - name: Generate timestamp version
+        id: version
+        run: |
+          # YYMMDDHHMM for versionCode (fits in int32)
+          VERSION_CODE=$(date -u +%y%m%d%H%M)
+          # YYYY.MMDD.HHMM for versionName
+          VERSION_NAME=$(date -u +%Y.%m%d.%H%M)
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "Generated version: code=$VERSION_CODE name=$VERSION_NAME"
+
+      - name: Prepare extension source with versioning
+        run: |
+          # Copy extension source to extensions-source
+          cp -r src res build.gradle /tmp/extensions-source/src/all/komgagorse/
+
+          # Update build.gradle with timestamp version
+          cd /tmp/extensions-source/src/all/komgagorse
+          sed -i "s/extVersionCode = .*/extVersionCode = ${{ steps.version.outputs.VERSION_CODE }}/" build.gradle
+          echo "Updated build.gradle:"
+          cat build.gradle
+
+      - name: Restore signing key
+        run: |
+          echo "${{ secrets.SIGNING_KEY_BASE64 }}" | base64 -d > /tmp/signingkey.jks
+
+      - name: Build APK (Release)
+        working-directory: /tmp/extensions-source
+        env:
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cp /tmp/signingkey.jks signingkey.jks
+          chmod +x gradlew
+          ./gradlew :src:all:komgagorse:assembleRelease
+
+      - name: Create repo structure
+        run: |
+          mkdir -p repo/apk repo/icon
+
+          # Find the built APK
+          APK_PATH=$(find /tmp/extensions-source/src/all/komgagorse/build -name "*-release.apk" -type f | head -1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find /tmp/extensions-source/src/all/komgagorse/build -name "*.apk" -not -name "*-unsigned*" -type f | head -1)
+          fi
+          echo "Found APK: $APK_PATH"
+
+          VERSION_NAME="${{ steps.version.outputs.VERSION_NAME }}"
+          APK_FILENAME="tachiyomi-all.komga-gorse-v${VERSION_NAME}.apk"
+          cp "$APK_PATH" "repo/apk/${APK_FILENAME}"
+
+          # Remove old APKs (keep only latest)
+          cd repo/apk
+          ls -t *.apk | tail -n +2 | xargs -r rm -f
+          cd ../..
+
+          # Extract metadata using aapt + python
+          AAPT=$(find $ANDROID_HOME/build-tools -name "aapt" | sort -r | head -1)
+          APK_FILE="repo/apk/${APK_FILENAME}"
+
+          $AAPT dump --include-meta-data badging "$APK_FILE" > /tmp/badging.txt
+          echo "=== BADGING OUTPUT ==="
+          cat /tmp/badging.txt
+          echo "=== END BADGING ==="
+
+          # Get signing fingerprint using apksigner
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name "apksigner" | sort -r | head -1)
+          echo "=== SIGNING INFO ==="
+          $APKSIGNER verify --print-certs "$APK_FILE" > /tmp/signing.txt 2>&1 || true
+          cat /tmp/signing.txt
+          echo "=== END SIGNING ==="
+
+          # Extract icon
+          ICON_PATH=$(grep "^application-icon-320:" /tmp/badging.txt | head -1 | sed "s/application-icon-320:'\([^']*\)'/\1/")
+          if [ -n "$ICON_PATH" ]; then
+            unzip -jo "$APK_FILE" "$ICON_PATH" -d /tmp/icon_tmp/ 2>/dev/null || true
+          fi
+
+          # Use python for all metadata extraction
+          python3 << 'PYEOF'
+          import json, hashlib, struct, re, shutil, os
+
+          with open("/tmp/badging.txt") as f:
+              badging = f.read()
+
+          pkg_line = [l for l in badging.splitlines() if l.startswith("package:")][0]
+          pkg_name = re.search(r"name='([^']+)'", pkg_line).group(1)
+          version_code = re.search(r"versionCode='([^']+)'", pkg_line).group(1)
+          version_name = re.search(r"versionName='([^']+)'", pkg_line).group(1)
+
+          label_match = re.search(r"^application-label:'([^']+)'", badging, re.MULTILINE)
+          app_label = label_match.group(1) if label_match else "Tachiyomi: Komga Gorse"
+
+          nsfw_match = re.search(r"tachiyomi\.extension\.nsfw.*?value='([^']+)'", badging)
+          nsfw = int(nsfw_match.group(1)) if nsfw_match else 0
+
+          print(f"Package: {pkg_name}")
+          print(f"Version: {version_name} ({version_code})")
+          print(f"Label: {app_label}")
+          print(f"NSFW: {nsfw}")
+
+          # Copy icon
+          icon_dir = "/tmp/icon_tmp"
+          if os.path.exists(icon_dir):
+              for f in os.listdir(icon_dir):
+                  src = os.path.join(icon_dir, f)
+                  dst = f"repo/icon/{pkg_name}.png"
+                  shutil.copy2(src, dst)
+                  print(f"Copied icon to {dst}")
+
+          # Parse signing fingerprint
+          fingerprint = ""
+          with open("/tmp/signing.txt") as f:
+              signing = f.read()
+          fp_match = re.search(r"SHA-256 digest:\s*([a-f0-9]+)", signing)
+          if not fp_match:
+              fp_match = re.search(r"certificate SHA-256 digest:\s*([a-f0-9]+)", signing)
+          if fp_match:
+              fingerprint = fp_match.group(1).lower()
+          print(f"Signing fingerprint: {fingerprint}")
+
+          # Compute source IDs using Tachiyomi's algorithm
+          def compute_source_id(name, lang, version_id):
+              key = f"{name.lower()}/{lang}/{version_id}"
+              md5 = hashlib.md5(key.encode("utf-8")).digest()
+              return str(struct.unpack(">q", md5[:8])[0])
+
+          sources = [
+              {"name": "Komga Gorse", "lang": "all", "id": compute_source_id("Komga Gorse", "all", 1), "baseUrl": ""},
+              {"name": "Komga Gorse (2)", "lang": "all", "id": compute_source_id("Komga Gorse (2)", "all", 1), "baseUrl": ""},
+              {"name": "Komga Gorse (3)", "lang": "all", "id": compute_source_id("Komga Gorse (3)", "all", 1), "baseUrl": ""},
+          ]
+
+          # Use versioned APK filename
+          apk_files = [f for f in os.listdir("repo/apk") if f.endswith(".apk")]
+          apk_filename = apk_files[0] if apk_files else f"tachiyomi-all.komga-gorse-v{version_name}.apk"
+
+          entry = {
+              "name": app_label,
+              "pkg": pkg_name,
+              "apk": apk_filename,
+              "lang": "all",
+              "code": int(version_code),
+              "version": version_name,
+              "nsfw": nsfw,
+              "sources": sources,
+          }
+
+          with open("repo/index.min.json", "w") as f:
+              json.dump([entry], f, ensure_ascii=False, separators=(",", ":"))
+          print("Generated index.min.json:")
+          print(json.dumps([entry], indent=2))
+
+          repo_meta = {
+              "meta": {
+                  "name": "Komga Gorse",
+                  "website": "https://github.com/maolei1024/komgagorse-extension",
+                  "signingKeyFingerprint": fingerprint
+              }
+          }
+          with open("repo/repo.json", "w") as f:
+              json.dump(repo_meta, f, ensure_ascii=False, separators=(",", ":"))
+          print("Generated repo.json:")
+          print(json.dumps(repo_meta, indent=2))
+          PYEOF
+
+          echo "Final repo structure:"
+          find repo/ -type f
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add repo/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "ci: 自动构建扩展 v${{ steps.version.outputs.VERSION_NAME }}"
+            git push
+          fi
