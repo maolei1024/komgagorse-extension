@@ -38,9 +38,11 @@ jobs:
       - name: Generate timestamp version
         id: version
         run: |
-          # YYMMDDHHMM for versionCode (fits in int32)
-          VERSION_CODE=$(date -u +%y%m%d%H%M)
-          # YYYY.MMDD.HHMM for versionName
+          # versionCode: minutes since 2024-01-01 (fits int32, monotonically increasing)
+          EPOCH_BASE=1704067200  # 2024-01-01 00:00:00 UTC
+          NOW=$(date -u +%s)
+          VERSION_CODE=$(( (NOW - EPOCH_BASE) / 60 ))
+          # versionName: human-readable timestamp
           VERSION_NAME=$(date -u +%Y.%m%d.%H%M)
           echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_OUTPUT
