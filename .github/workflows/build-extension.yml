@@ -49,6 +49,7 @@ jobs:
       - name: Prepare extension source with versioning
         run: |
           # Copy extension source to extensions-source
+          mkdir -p /tmp/extensions-source/src/all/komgagorse
           cp -r src res build.gradle /tmp/extensions-source/src/all/komgagorse/
 
           # Update build.gradle with timestamp version
