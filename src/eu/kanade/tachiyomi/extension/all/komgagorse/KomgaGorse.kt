@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.all.komgagorse
 
-import android.app.Application
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
@@ -92,6 +91,8 @@ open class KomgaGorse(private val suffix: String = "") :
 
     private val defaultLibraries
         get() = preferences.getStringSet(PREF_DEFAULT_LIBRARIES, emptySet())!!
+
+    private var appContext: android.content.Context? = null
 
     private val json: Json by injectLazy()
 
@@ -383,9 +384,18 @@ open class KomgaGorse(private val suffix: String = "") :
     }
 
     private fun showToast(message: String) {
-        val appContext = uy.kohesive.injekt.Injekt.get<android.app.Application>()
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+        try {
+            val ctx = appContext
+                ?: try { uy.kohesive.injekt.Injekt.get<android.app.Application>() } catch (_: Exception) { null }
+            if (ctx != null) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Log.w(logTag, "Toast skipped (no context): $message")
+            }
+        } catch (e: Exception) {
+            Log.e(logTag, "Toast failed: $message", e)
         }
     }
 
@@ -449,6 +459,7 @@ open class KomgaGorse(private val suffix: String = "") :
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         fetchFilterOptions()
+        appContext = screen.context.applicationContext
 
         if (suffix.isEmpty()) {
             ListPreference(screen.context).apply {
