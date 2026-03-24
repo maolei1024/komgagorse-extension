@@ -45,7 +45,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.apache.commons.text.StringSubstitutor
+import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
+import android.app.Application
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
