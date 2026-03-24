@@ -383,10 +383,18 @@ open class KomgaGorse(private val suffix: String = "") :
         }
     }
 
+    private fun getToastContext(): android.content.Context? {
+        appContext?.let { return it }
+        return try {
+            uy.kohesive.injekt.Injekt.get<android.app.Application>()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun showToast(message: String) {
         try {
-            val ctx = appContext
-                ?: try { uy.kohesive.injekt.Injekt.get<android.app.Application>() } catch (_: Exception) { null }
+            val ctx = getToastContext()
             if (ctx != null) {
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
