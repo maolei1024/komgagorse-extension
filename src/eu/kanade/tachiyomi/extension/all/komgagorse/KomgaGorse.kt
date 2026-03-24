@@ -1,12 +1,15 @@
 package eu.kanade.tachiyomi.extension.all.komgagorse
 
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.widget.Toast
 import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
+import androidx.preference.SeekBarPreference
 import eu.kanade.tachiyomi.AppInfo
 import eu.kanade.tachiyomi.extension.all.komgagorse.dto.AuthorDto
 import eu.kanade.tachiyomi.extension.all.komgagorse.dto.BookDto
@@ -83,6 +86,8 @@ open class KomgaGorse(private val suffix: String = "") :
     private val password by lazy { preferences.getString(PREF_PASSWORD, "")!! }
 
     private val apiKey by lazy { preferences.getString(PREF_API_KEY, "")!! }
+
+    private val completeThreshold by lazy { preferences.getInt(PREF_COMPLETE_THRESHOLD, 100) }
 
     private val defaultLibraries
         get() = preferences.getStringSet(PREF_DEFAULT_LIBRARIES, emptySet())!!
@@ -335,18 +340,18 @@ open class KomgaGorse(private val suffix: String = "") :
         readingTracker[bookId] = Pair(totalPages, newMax)
         if (totalPages <= 0) return
 
-        val progress = newMax.toDouble() / totalPages
+        val progressPct = (newMax.toDouble() / totalPages * 100).toInt()
 
-        // Komga page progress: 每 10% 增量发送，或到达最后一页时立即发送
+        // Komga page progress: 每 10% 增量发送，或达到完成阈值时立即发送
         val previousSentPage = lastSentPage[bookId] ?: 0
         val pageIncrement = (totalPages * 0.1).toInt().coerceAtLeast(1)
-        val isComplete = newMax >= totalPages
+        val isComplete = progressPct >= completeThreshold
         val shouldSend = (newMax > previousSentPage && (newMax - previousSentPage) >= pageIncrement) || isComplete
         if (shouldSend) {
             lastSentPage[bookId] = newMax
             scope.launch {
                 try {
-                    // 到达最后一页时标记 completed，否则只更新页码
+                    // 达到完成阈值时标记 completed，否则只更新页码
                     val requestBody = if (isComplete) {
                         """{"completed":true}"""
                     } else {
@@ -360,15 +365,26 @@ open class KomgaGorse(private val suffix: String = "") :
                         .build()
                     client.newCall(request).execute().close()
                     if (isComplete) {
-                        Log.i(logTag, "Book $bookId marked as completed ($newMax/$totalPages)")
+                        Log.i(logTag, "Book $bookId marked as completed ($newMax/$totalPages, $progressPct%)")
+                        showToast("\u2713 已标记阅读完成 ($newMax/$totalPages)")
                     } else {
-                        Log.i(logTag, "Read progress sent for book $bookId: page $newMax/$totalPages (${(progress * 100).toInt()}%)")
+                        Log.i(logTag, "Read progress sent for book $bookId: page $newMax/$totalPages ($progressPct%)")
                     }
                 } catch (e: Exception) {
                     lastSentPage[bookId] = previousSentPage // 失败时回退
                     Log.e(logTag, "Failed to send read progress for book $bookId", e)
+                    if (isComplete) {
+                        showToast("\u2717 标记阅读完成失败，请检查网络")
+                    }
                 }
             }
+        }
+    }
+
+    private fun showToast(message: String) {
+        val appContext = uy.kohesive.injekt.Injekt.get<android.app.Application>()
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -510,6 +526,16 @@ open class KomgaGorse(private val suffix: String = "") :
             setDefaultValue(emptySet<String>())
         }.also(screen::addPreference)
 
+        SeekBarPreference(screen.context).apply {
+            key = PREF_COMPLETE_THRESHOLD
+            title = "阅读完成阈值 (%)"
+            summary = "阅读到该百分比时自动标记为已完成并同步到 Komga"
+            min = 50
+            max = 100
+            setDefaultValue(100)
+            showSeekBarValue = true
+        }.also(screen::addPreference)
+
         val values = hashMapOf(
             "title" to "",
             "seriesTitle" to "",
@@ -632,6 +658,7 @@ private const val PREF_USERNAME = "Username"
 private const val PREF_PASSWORD = "Password"
 private const val PREF_API_KEY = "API key"
 private const val PREF_DEFAULT_LIBRARIES = "Default libraries"
+private const val PREF_COMPLETE_THRESHOLD = "pref_complete_threshold"
 private const val PREF_CHAPTER_NAME_TEMPLATE = "Chapter name template"
 private const val PREF_CHAPTER_NAME_TEMPLATE_DEFAULT = "{number} - {title} ({size})"
 
