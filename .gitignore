@@ -1,6 +1,9 @@
 # Build artifacts (except repo/apk/ which is needed for Mihon distribution)
 *.apk
 !repo/apk/*.apk
+.gradle/
+build/
+local.properties
 
 # IDE
 .idea/
