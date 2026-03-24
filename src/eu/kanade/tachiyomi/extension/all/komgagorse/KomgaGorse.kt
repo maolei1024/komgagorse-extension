@@ -9,7 +9,6 @@ import android.widget.Toast
 import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
-import androidx.preference.SeekBarPreference
 import eu.kanade.tachiyomi.AppInfo
 import eu.kanade.tachiyomi.extension.all.komgagorse.dto.AuthorDto
 import eu.kanade.tachiyomi.extension.all.komgagorse.dto.BookDto
@@ -526,15 +525,19 @@ open class KomgaGorse(private val suffix: String = "") :
             setDefaultValue(emptySet<String>())
         }.also(screen::addPreference)
 
-        SeekBarPreference(screen.context).apply {
-            key = PREF_COMPLETE_THRESHOLD
-            title = "阅读完成阈值 (%)"
-            summary = "阅读到该百分比时自动标记为已完成并同步到 Komga"
-            min = 50
-            max = 100
-            setDefaultValue(100)
-            showSeekBarValue = true
-        }.also(screen::addPreference)
+        screen.addEditTextPreference(
+            title = "阅读完成阈值 (%)",
+            default = "100",
+            summary = "阅读到该百分比时自动标记为已完成并同步到 Komga",
+            dialogMessage = "请输入 50 到 100 之间的一个数值。",
+            inputType = InputType.TYPE_CLASS_NUMBER,
+            validate = {
+                val num = it.toIntOrNull()
+                num != null && num in 50..100
+            },
+            validationMessage = "数值无效，必须在 50 并且小于 100 之间",
+            key = PREF_COMPLETE_THRESHOLD,
+        )
 
         val values = hashMapOf(
             "title" to "",
