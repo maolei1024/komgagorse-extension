@@ -102,6 +102,9 @@ open class KomgaGorse(private val suffix: String = "") :
     // Komga page progress: 记录已发送的最大页码，持续更新
     private val lastSentPage = ConcurrentHashMap<String, Int>()
 
+    // 已标记完成的 book，避免重复发送 completed 和弹出 Toast
+    private val completedBooks = ConcurrentHashMap.newKeySet<String>()
+
     override fun headersBuilder() = super.headersBuilder()
         .set("User-Agent", "TachiyomiKomga/${AppInfo.getVersionName()}")
         .also { builder ->
@@ -347,7 +350,7 @@ open class KomgaGorse(private val suffix: String = "") :
         // Komga page progress: 每 10% 增量发送，或达到完成阈值时立即发送
         val previousSentPage = lastSentPage[bookId] ?: 0
         val pageIncrement = (totalPages * 0.1).toInt().coerceAtLeast(1)
-        val isComplete = progressPct >= completeThreshold
+        val isComplete = progressPct >= completeThreshold && bookId !in completedBooks
         val shouldSend = (newMax > previousSentPage && (newMax - previousSentPage) >= pageIncrement) || isComplete
         if (shouldSend) {
             lastSentPage[bookId] = newMax
@@ -367,6 +370,7 @@ open class KomgaGorse(private val suffix: String = "") :
                         .build()
                     client.newCall(request).execute().close()
                     if (isComplete) {
+                        completedBooks.add(bookId)
                         Log.i(logTag, "Book $bookId marked as completed ($newMax/$totalPages, $progressPct%)")
                         showToast("\u2713 已标记阅读完成 ($newMax/$totalPages)")
                     } else {
