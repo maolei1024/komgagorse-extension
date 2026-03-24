@@ -88,7 +88,7 @@ open class KomgaGorse(private val suffix: String = "") :
 
     private val apiKey by lazy { preferences.getString(PREF_API_KEY, "")!! }
 
-    private val completeThreshold by lazy { preferences.getInt(PREF_COMPLETE_THRESHOLD, 100) }
+    private val completeThreshold: Int get() = preferences.getString(PREF_COMPLETE_THRESHOLD, "100")?.toIntOrNull() ?: 100
 
     private val defaultLibraries
         get() = preferences.getStringSet(PREF_DEFAULT_LIBRARIES, emptySet())!!
