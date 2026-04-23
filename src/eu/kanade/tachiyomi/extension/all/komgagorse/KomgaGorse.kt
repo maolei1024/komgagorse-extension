@@ -340,6 +340,7 @@ open class KomgaGorse(private val suffix: String = "") :
      * - 持续更新页码进度（每 10% 增量或到达最后一页时发送）
      */
     private fun trackReadProgress(bookId: String, pageNumber: Int) {
+        if (completedBooks.contains(bookId)) return
         val (totalPages, maxPage) = readingTracker[bookId] ?: return
         val newMax = maxOf(maxPage, pageNumber)
         readingTracker[bookId] = Pair(totalPages, newMax)
