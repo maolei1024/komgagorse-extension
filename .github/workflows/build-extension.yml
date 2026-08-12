@@ -6,7 +6,8 @@ on:
     paths:
       - 'src/**'
       - 'res/**'
-      - 'build.gradle'
+      - 'build.gradle.kts'
+      - 'proguard-rules.pro'
       - '.github/workflows/build-extension.yml'
   workflow_dispatch:
 
@@ -31,7 +32,7 @@ jobs:
 
       - name: Install Android SDK components
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platforms;android-37" "build-tools;36.0.0"
 
       - name: Clone extensions-source
         run: |
@@ -54,13 +55,13 @@ jobs:
         run: |
           # Copy extension source to extensions-source
           mkdir -p /tmp/extensions-source/src/all/komgagorse
-          cp -r src res build.gradle /tmp/extensions-source/src/all/komgagorse/
+          cp -r src res build.gradle.kts proguard-rules.pro /tmp/extensions-source/src/all/komgagorse/
 
-          # Update build.gradle with timestamp version
+          # Update build.gradle.kts with timestamp version
           cd /tmp/extensions-source/src/all/komgagorse
-          sed -i "s/extVersionCode = .*/extVersionCode = ${{ steps.version.outputs.VERSION_CODE }}/" build.gradle
-          echo "Updated build.gradle:"
-          cat build.gradle
+          sed -i "s/versionCode = .*/versionCode = ${{ steps.version.outputs.VERSION_CODE }}/" build.gradle.kts
+          echo "Updated build.gradle.kts:"
+          cat build.gradle.kts
 
       - name: Restore signing key
         run: |
@@ -121,7 +122,7 @@ jobs:
 
           # Use python for all metadata extraction
           python3 << 'PYEOF'
-          import json, hashlib, struct, re, shutil, os
+          import json, re, shutil, os
 
           with open("/tmp/badging.txt") as f:
               badging = f.read()
@@ -162,16 +163,10 @@ jobs:
               fingerprint = fp_match.group(1).lower()
           print(f"Signing fingerprint: {fingerprint}")
 
-          # Compute source IDs using Tachiyomi's algorithm
-          def compute_source_id(name, lang, version_id):
-              key = f"{name.lower()}/{lang}/{version_id}"
-              md5 = hashlib.md5(key.encode("utf-8")).digest()
-              return str(struct.unpack(">q", md5[:8])[0])
-
           sources = [
-              {"name": "Komga Gorse", "lang": "all", "id": compute_source_id("Komga Gorse", "all", 1), "baseUrl": ""},
-              {"name": "Komga Gorse (2)", "lang": "all", "id": compute_source_id("Komga Gorse (2)", "all", 1), "baseUrl": ""},
-              {"name": "Komga Gorse (3)", "lang": "all", "id": compute_source_id("Komga Gorse (3)", "all", 1), "baseUrl": ""},
+              {"name": "Komga Gorse", "lang": "all", "id": "8656569799497662329", "baseUrl": ""},
+              {"name": "Komga Gorse (2)", "lang": "all", "id": "5204932013275616902", "baseUrl": ""},
+              {"name": "Komga Gorse (3)", "lang": "all", "id": "5592401397387013854", "baseUrl": ""},
           ]
 
           # Use versioned APK filename

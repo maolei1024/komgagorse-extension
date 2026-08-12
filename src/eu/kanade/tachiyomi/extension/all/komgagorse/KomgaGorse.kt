@@ -6,7 +6,6 @@ import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.widget.Toast
-import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.AppInfo
@@ -29,6 +28,7 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import keiyoushi.annotation.Source
 import keiyoushi.utils.getPreferencesLazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,12 +47,15 @@ import okhttp3.Response
 import org.apache.commons.text.StringSubstitutor
 import uy.kohesive.injekt.api.get
 import uy.kohesive.injekt.injectLazy
-import java.security.MessageDigest
+import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
-open class KomgaGorse(private val suffix: String = "") :
-    HttpSource(),
+@Source
+class KomgaGorse(
+    override val lang: String,
+    override val id: Long,
+) : HttpSource(),
     ConfigurableSource,
     UnmeteredSource {
 
@@ -62,24 +65,18 @@ open class KomgaGorse(private val suffix: String = "") :
 
     override val name by lazy {
         val displayNameSuffix = displayName
-            .ifBlank { suffix }
+            .ifBlank { instanceSuffix }
             .let { if (it.isNotBlank()) " ($it)" else "" }
 
         "Komga Gorse$displayNameSuffix"
     }
 
-    override val lang = "all"
-
     override val baseUrl by lazy { preferences.getString(PREF_ADDRESS, "")!!.removeSuffix("/") }
 
     override val supportsLatest = true
 
-    // keep the previous ID when lang was "en", so that preferences and manga bindings are not lost
-    override val id by lazy {
-        val key = "komga-gorse${if (suffix.isNotBlank()) " ($suffix)" else ""}/en/$versionId"
-        val bytes = MessageDigest.getInstance("MD5").digest(key.toByteArray())
-        (0..7).map { bytes[it].toLong() and 0xff shl 8 * (7 - it) }.reduce(Long::or) and Long.MAX_VALUE
-    }
+    private val instanceSuffix: String
+        get() = INSTANCE_IDS.indexOf(id).let { if (it > 0) "${it + 1}" else "" }
 
     private val username by lazy { preferences.getString(PREF_USERNAME, "")!! }
 
@@ -114,7 +111,7 @@ open class KomgaGorse(private val suffix: String = "") :
         }
 
     override val client: OkHttpClient =
-        network.cloudflareClient.newBuilder()
+        network.client.newBuilder()
             .authenticator { _, response ->
                 if (apiKey.isNotBlank() || response.request.header("Authorization") != null) {
                     null // Give up if API key is set or we've already failed to authenticate.
@@ -136,6 +133,41 @@ open class KomgaGorse(private val suffix: String = "") :
     }
 
     override fun popularMangaParse(response: Response): MangasPage = processSeriesPage(response, baseUrl)
+
+    /**
+     * Self-Mihon optional ABI. Deliberately not declared as override until the upstream
+     * extensions-lib exposes the hook; virtual dispatch still resolves this exact JVM method.
+     */
+    fun gorsePreferenceStatusRequest(manga: SManga): Request? {
+        val target = preferenceTarget(manga.url) ?: return null
+        return GET("$baseUrl/api/v1/gorse/preference/${target.first}/${target.second}", headers)
+    }
+
+    /** See [gorsePreferenceStatusRequest]. */
+    fun gorsePreferenceUpdateRequest(manga: SManga, preference: String): Request? {
+        if (preference !in GORSE_PREFERENCES) return null
+        val target = preferenceTarget(manga.url) ?: return null
+        val body = """{"preference":"$preference"}"""
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        return Request.Builder()
+            .url("$baseUrl/api/v1/gorse/preference/${target.first}/${target.second}")
+            .headers(headers)
+            .put(body)
+            .build()
+    }
+
+    private fun preferenceTarget(url: String): Pair<String, String>? {
+        val path = runCatching { URI(url).path }.getOrNull() ?: return null
+        val segments = path.split('/').filter(String::isNotBlank)
+        val apiIndex = segments.indexOfLast { it == "api" }
+        if (apiIndex < 0 || segments.drop(apiIndex).size != 4 || segments[apiIndex + 1] != "v1") return null
+        val id = segments[apiIndex + 3].takeIf(String::isNotBlank) ?: return null
+        return when (segments[apiIndex + 2]) {
+            "series" -> "series" to id
+            "books" -> "book" to id
+            else -> null
+        }
+    }
 
     override fun latestUpdatesRequest(page: Int): Request = searchMangaRequest(
         page,
@@ -474,25 +506,9 @@ open class KomgaGorse(private val suffix: String = "") :
         fetchFilterOptions()
         appContext = screen.context.applicationContext
 
-        if (suffix.isEmpty()) {
-            ListPreference(screen.context).apply {
-                key = PREF_EXTRA_SOURCES_COUNT
-                title = "Number of extra sources"
-                summary = "Number of additional sources to create. There will always be at least one Komga source."
-                entries = PREF_EXTRA_SOURCES_ENTRIES
-                entryValues = PREF_EXTRA_SOURCES_ENTRIES
-
-                setDefaultValue(PREF_EXTRA_SOURCES_DEFAULT)
-                setOnPreferenceChangeListener { _, _ ->
-                    Toast.makeText(screen.context, "Restart Tachiyomi to apply new setting.", Toast.LENGTH_LONG).show()
-                    true
-                }
-            }.also(screen::addPreference)
-        }
-
         screen.addEditTextPreference(
             title = "Source display name",
-            default = suffix,
+            default = instanceSuffix,
             summary = displayName.ifBlank { "Here you can change the source displayed suffix" },
             key = PREF_DISPLAY_NAME,
             restartRequired = true,
@@ -661,12 +677,10 @@ open class KomgaGorse(private val suffix: String = "") :
 
     private inline fun <reified T> Response.parseAs(): T = json.decodeFromString(body.string())
 
-    private val logTag by lazy { "komga-gorse${if (suffix.isNotBlank()) ".$suffix" else ""}" }
+    private val logTag by lazy { "komga-gorse${if (instanceSuffix.isNotBlank()) ".$instanceSuffix" else ""}" }
 
     companion object {
-        internal const val PREF_EXTRA_SOURCES_COUNT = "Number of extra sources"
-        internal const val PREF_EXTRA_SOURCES_DEFAULT = "2"
-
+        private val GORSE_PREFERENCES = setOf("NONE", "LIKE", "DISLIKE")
         internal const val TYPE_SERIES = "Series"
         internal const val TYPE_READLISTS = "Read lists"
         internal const val TYPE_BOOKS = "Books"
@@ -679,7 +693,7 @@ private enum class FetchFilterStatus {
     FETCHED,
 }
 
-private val PREF_EXTRA_SOURCES_ENTRIES = (0..10).map { it.toString() }.toTypedArray()
+private val INSTANCE_IDS = listOf(8656569799497662329L, 5204932013275616902L, 5592401397387013854L)
 
 private const val PREF_DISPLAY_NAME = "Source display name"
 private const val PREF_ADDRESS = "Address"
